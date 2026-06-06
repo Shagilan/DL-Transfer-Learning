@@ -1,274 +1,193 @@
-# DL- Developing a Deep Learning Model for NER using LSTM
-
+# EX-04: DL- Developing a Neural Network Classification Model using Transfer Learning
 ## AIM
-To develop an LSTM-based model for recognizing the named entities in the text.
+To develop an image classification model using transfer learning with VGG19 architecture for the given dataset.
 
-## Problem Statement and Dataset :
+## THEORY
 
-This notebook tackles Named Entity Recognition (NER), an NLP task focused on identifying and classifying named entities within text. It employs a Bi-directional Long Short-Term Memory (Bi-LSTM) network in PyTorch to train a model. The objective is to accurately extract and categorize entities like person, location, and organization from input sentences.
 
-<img width="1300" height="796" alt="image" src="https://github.com/user-attachments/assets/1f6c6ace-9263-480d-85aa-5cfb734695ba" />
-
+## Neural Network Model
+Include the neural network model diagram.
 
 ## DESIGN STEPS
-### STEP 1: 
+STEP 1: Import required libraries and define image transforms.
 
-Load data, create word/tag mappings, and group sentences.
+STEP 2: Load training and testing datasets using ImageFolder.
 
-### STEP 2:
-Convert sentences to index sequences, pad to fixed length, and split into training/testing sets.
+STEP 3: Visualize sample images from the dataset.
 
-### STEP 3:
-Define dataset and DataLoader for batching.
+STEP 4: Load pre-trained VGG19, modify the final layer for binary classification, and freeze feature extractor layers.
 
-### STEP 4:
-Build a bidirectional LSTM model for sequence tagging.
+STEP 5: Define loss function (BCEWithLogitsLoss) and optimizer (Adam). Train the model and plot the loss curve.
 
-### STEP 5:
-Train the model over multiple epochs, tracking loss.
-
-### STEP 6:
-Evaluate model accuracy, plot loss curves, and visualize predictions on a sample.
-
-
-
-
+STEP 6: Evaluate the model with test accuracy, confusion matrix, classification report, and visualize predictions.
 
 ## PROGRAM
 
-### Name: SHAGILAN U
+### Name:GOWTHAM G T
 
-### Register Number:212224040303
+### Register Number: 212224110017
 
-```
-
-import pandas as pd
-import torch
+```python
+# Load Pretrained Model and Modify for Transfer Learning
+import torch as t
 import torch.nn as nn
-import numpy as np
+import torch.optim as optim
+import torchvision
+from torchvision import datasets,models
+from torchvision.models import VGG19_Weights
+import torchvision.transforms as transforms
+from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
-from torch.utils.data import Dataset, DataLoader
-from torch.nn.utils.rnn import pad_sequence
-import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning)
+import pandas as pd
+import numpy as np
+import seaborn as sns
+from sklearn.metrics import confusion_matrix, classification_report
+from torchsummary import summary
+# Modify the final fully connected layer to match the dataset classes
+transform=transforms.Compose([transforms.Resize((224,224)),transforms.ToTensor()])
+!unzip -qq ./chip_data.zip -d data
+dataset_path='./data/dataset'
+train_dataset=datasets.ImageFolder(root=f"{dataset_path}/train",transform=transform)
+test_dataset=datasets.ImageFolder(root=f"{dataset_path}/test",transform=transform)
+def show_sample_images(dataset,num_images=5):
+  fig,axes=plt.subplots(1,num_images,figsize=(5,5))
+  for i in range(num_images):
+    image,label=dataset[i]
+    image=image.permute(1,2,0)
+    axes[i].imshow(image)
+    axes[i].set_title(dataset.classes[label])
+    axes[i].axis("off")
+  plt.show()
+train_loader=DataLoader(train_dataset,batch_size=32,shuffle=True)
+test_loader=DataLoader(test_dataset,batch_size=32,shuffle=False)
+model=models.vgg19(weights=VGG19_Weights.DEFAULT)
+device=t.device("cuda" if t.cuda.is_available() else "cpu")
+model=model.to(device)
+summary(model,input_size=(3,224,224))
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"Using device: {device}")
+model.classifier[-1]=nn.Linear(model.classifier[-1].in_features,1)
+device=t.device("cuda" if t.cuda.is_available() else "cpu")
+model=model.to(device)
+summary(model,input_size=(3,224,224))
 
-data = pd.read_csv("/content/ner_dataset.csv", encoding="latin1").ffill()
+for param in model.features.parameters():
+  param.requires_grad=False
 
-words = list(data["Word"].unique())
-tags = list(data["Tag"].unique())
+# Include the Loss function and optimizer
+criterion=nn.BCEWithLogitsLoss()
+optimizer=optim.Adam(model.parameters(),lr=0.001)
+# Train the model
+def train_model(model,train_loader,test_loader,num_epochs=10):
+  train_losses=[]
+  val_losses=[]
+  for epoch in range(num_epochs):
+    running_loss=0.0
+    for images,labels in train_loader:
+      images,labels=images.to(device),labels.to(device)
+      optimizer.zero_grad()
+      outputs=model(images)
+      loss=criterion(outputs,labels.unsqueeze(1).float())
+      loss.backward()
+      optimizer.step()
+      running_loss+=loss.item()
+    train_losses.append(running_loss/len(train_loader))
 
-if "ENDPAD" not in words:
-    words.append("ENDPAD")
-
-if "PAD" not in tags:
-    tags.append("PAD")
-
-if "O" not in tags:
-    print("Warning: 'O' tag not present in dataset. Continuing without it.")
-
-
-word2idx = {w: i + 1 for i, w in enumerate(words)}  
-tag2idx = {t: i for i, t in enumerate(tags)}       
-idx2tag = {i: t for t, i in tag2idx.items()}
-
-print("Unique words in corpus:", data['Word'].nunique())
-print("Unique tags in corpus:", data['Tag'].nunique())
-print("All tags (including PAD):", tags)
-
-class SentenceGetter:
-    def __init__(self, data):
-       
-        grouped = data.groupby("Sentence #", group_keys=False).apply(
-            lambda s: [(w, t) for w, t in zip(s["Word"], s["Tag"])]
-        )
-        self.sentences = list(grouped)
-
-getter = SentenceGetter(data)
-sentences = getter.sentences
-print("Example sentence (index 0):", sentences[0])
-
-X = [[word2idx[w] for w, t in s] for s in sentences]
-y = [[tag2idx[t] for w, t in s] for s in sentences]
-
-plt.hist([len(s) for s in sentences], bins=50)
-plt.title("Sentence length distribution")
-plt.xlabel("Length")
-plt.ylabel("Count")
-plt.show()
-
-max_len = 50
-
-X_tensors = [torch.tensor(seq, dtype=torch.long) for seq in X]
-y_tensors = [torch.tensor(seq, dtype=torch.long) for seq in y]
-
-pad_input_value = word2idx["ENDPAD"]                   
-pad_label_value = tag2idx["PAD"]                       
-
-X_pad = pad_sequence(X_tensors, batch_first=True, padding_value=pad_input_value)
-y_pad = pad_sequence(y_tensors, batch_first=True, padding_value=pad_label_value)
-
-if X_pad.size(1) < max_len:
-
-    pad_amt = max_len - X_pad.size(1)
-    X_pad = torch.cat([X_pad, torch.full((X_pad.size(0), pad_amt), pad_input_value, dtype=torch.long)], dim=1)
-    y_pad = torch.cat([y_pad, torch.full((y_pad.size(0), pad_amt), pad_label_value, dtype=torch.long)], dim=1)
-else:
-    X_pad = X_pad[:, :max_len]
-    y_pad = y_pad[:, :max_len]
-
-print("X_pad shape:", X_pad.shape)
-print("y_pad shape:", y_pad.shape)
-
-dataset_size = X_pad.size(0)
-perm = torch.randperm(dataset_size)
-train_size = int(0.8 * dataset_size)
-train_idx = perm[:train_size]
-test_idx = perm[train_size:]
-
-X_train = X_pad[train_idx]
-y_train = y_pad[train_idx]
-X_test = X_pad[test_idx]
-y_test = y_pad[test_idx]
-
-class NERDataset(Dataset):
-    def __init__(self, X, y):
-        self.X = X
-        self.y = y
-    def __len__(self):
-        return len(self.X)
-    def __getitem__(self, idx):
-        return {
-            "input_ids": self.X[idx],
-            "labels": self.y[idx]
-        }
-
-train_loader = DataLoader(NERDataset(X_train, y_train), batch_size=32, shuffle=True)
-test_loader = DataLoader(NERDataset(X_test, y_test), batch_size=32, shuffle=False)
-
-class BiLSTMTagger(nn.Module):
-    def __init__(self, vocab_size, tagset_size, embedding_dim=50, hidden_dim=100, dropout=0.1):
-        super(BiLSTMTagger, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=0)
-        self.dropout = nn.Dropout(dropout)
-        self.lstm = nn.LSTM(embedding_dim, hidden_dim, batch_first=True, bidirectional=True)
-        self.fc = nn.Linear(hidden_dim * 2, tagset_size)
-
-    def forward(self, x):
-        x = self.embedding(x)           
-        x = self.dropout(x)
-        x, _ = self.lstm(x)         
-        out = self.fc(x)     
-        return out
-
-vocab_size = len(word2idx) + 1   
-tagset_size = len(tag2idx)
-
-model = BiLSTMTagger(vocab_size=vocab_size, tagset_size=tagset_size).to(device)
-
-loss_fn = nn.CrossEntropyLoss(ignore_index=pad_label_value)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-
-def train_model(model, train_loader, val_loader, loss_fn, optimizer, epochs=3):
-    train_losses, val_losses = [], []
-    for epoch in range(epochs):
-        model.train()
-        total_loss = 0.0
-        for batch in train_loader:
-            input_ids = batch["input_ids"].to(device)
-            labels = batch["labels"].to(device)  # shape (batch, seq_len)
-            optimizer.zero_grad()
-            outputs = model(input_ids)          
-            loss = loss_fn(outputs.view(-1, tagset_size), labels.view(-1))
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item()
-
-        # validation
-        model.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            for batch in val_loader:
-                input_ids = batch["input_ids"].to(device)
-                labels = batch["labels"].to(device)
-                outputs = model(input_ids)
-                loss = loss_fn(outputs.view(-1, tagset_size), labels.view(-1))
-                val_loss += loss.item()
-
-        train_losses.append(total_loss)
-        val_losses.append(val_loss)
-        print(f"Epoch {epoch+1}/{epochs} — Train Loss: {total_loss:.4f} — Val Loss: {val_loss:.4f}")
-
-    return train_losses, val_losses
-
-def evaluate_model(model, test_loader):
     model.eval()
-    true_tags, pred_tags = [], []
-    with torch.no_grad():
-        for batch in test_loader:
-            input_ids = batch["input_ids"].to(device)
-            labels = batch["labels"].to(device)
-            outputs = model(input_ids)
-            preds = torch.argmax(outputs, dim=-1)
-            for i in range(labels.size(0)):
-                for j in range(labels.size(1)):
-                    lab = labels[i, j].item()
-                    if lab != pad_label_value: 
-                        true_tags.append(idx2tag[lab])
-                        pred_tags.append(idx2tag[preds[i, j].item()])
-    return true_tags, pred_tags
+    val_loss=0.0
+    with t.no_grad():
+      for images,labels in test_loader:
+        images,labels=images.to(device),labels.to(device)
+        outputs=model(images)
+        loss=criterion(outputs,labels.unsqueeze(1).float())
+        val_loss+=loss.item()
+    val_losses.append(val_loss/len(test_loader))
+    model.train()
 
-train_losses, val_losses = train_model(model, train_loader, test_loader, loss_fn, optimizer, epochs=3)
-true_tags, pred_tags = evaluate_model(model, test_loader)
+    print(f"Epoch [{epoch+1}/{num_epochs}], Train Loss: {train_losses[-1]:.4f}, Validation Loss: {val_losses[-1]:.4f}")
+  plt.figure(figsize=(8,6))
+  plt.plot(range(1,num_epochs+1),train_losses,label="Train Loss",marker="o")
+  plt.plot(range(1,num_epochs+1),val_losses,label="Validation Loss",marker="s")
+  plt.xlabel("Epochs")
+  plt.ylabel("Loss")
+  plt.title("Training and validation Loss")
+  plt.legend()
+  plt.show()
+device=t.device("cuda" if t.cuda.is_available() else "cpu")
+model=model.to(device)
+train_model(model,train_loader,test_loader)
+# Test the model
+def test_model(model,test_loader):
+  model.eval()
+  correct=0
+  total=0
+  all_preds=[]
+  all_labels=[]
 
-try:
-    from sklearn.metrics import classification_report
-    print("\nClassification Report (ignoring PAD):")
-    print(classification_report(true_tags, pred_tags, zero_division=0))
-except Exception as e:
-    print("sklearn not available or other error while creating classification report:", e)
+  with t.no_grad():
+    for images,labels in test_loader:
+      images=images.to(device)
+      labels=labels.float().unsqueeze(1).to(device)
 
-history_df = pd.DataFrame({"loss": train_losses, "val_loss": val_losses})
-history_df.plot(title="Loss Over Epochs")
-plt.xlabel("Epoch")
-plt.ylabel("Loss")
-plt.grid(True)
-plt.show()
+      outputs=model(images)
+      probs=t.sigmoid(outputs)
+      predicted=(probs > 0.5).int()
+      total+=labels.size(0)
+      correct+=(predicted==labels.int()).sum().item()
 
-sample_idx = 0
-if sample_idx < len(X_test):
-    model.eval()
-    sample = X_test[sample_idx].unsqueeze(0).to(device)
-    with torch.no_grad():
-        output = model(sample)
-        preds = torch.argmax(output, dim=-1).squeeze().cpu().numpy()
-    true = y_test[sample_idx].numpy()
-    print("{:<15} {:<12} {}".format("Word", "True", "Pred"))
-    print("-" * 42)
-    for w_id, true_tag_idx, pred_tag_idx in zip(X_test[sample_idx], true, preds):
-        if w_id.item() != pad_input_value:  
-            word = words[w_id.item() - 1]   
-            true_label = idx2tag[int(true_tag_idx)]
-            pred_label = idx2tag[int(pred_tag_idx)]
-            print(f"{word: <15} {true_label: <12} {pred_label}")
-else:
-    print("sample_idx out of range for X_test")
+      all_preds.extend(predicted.cpu().numpy())
+      all_labels.extend(labels.cpu().numpy().astype(int))
+  accuracy=correct/total
+  print(f"Test Accuracy: {accuracy:.4f}")
+
+  class_names=['Negative','Positive']
+  cm=confusion_matrix(all_labels,all_preds)
+  plt.figure(figsize=(6,5))
+  sns.heatmap(cm,annot=True,fmt='d',cmap='Blues',xticklabels=class_names,yticklabels=class_names)
+  plt.xlabel("Predicted")
+  plt.ylabel("Actual")
+  plt.title("Confusion Matrix")
+  plt.show()
 
 
+  print("Classification Report :")
+  print(classification_report(all_labels,all_preds,target_names=class_names))
 
+# Predict the model
+def predict_image(model,image_index,dataset):
+  model.eval()
+  image,label=dataset[image_index]
+  with t.no_grad():
+    image_tensor = image.unsqueeze(0).to(device)
+    output=model(image_tensor)
+    _,predicted=t.max(output,1)
+  class_names=dataset.classes
 
+  image_to_display=transforms.ToPILImage()(image)
+
+  plt.figure(figsize=(4,4))
+  plt.imshow(image_to_display)
+  plt.title(f'Actual: {class_names[label]}\nPredicted: {class_names[predicted.item()]}')
+  plt.axis('off')
+  plt.show()
+predict_image(model,image_index=55,dataset=test_dataset)
+predict_image(model,image_index=25,dataset=test_dataset)
 ```
 
 ### OUTPUT
-## Loss Vs Epoch Plot
 
-<img width="571" height="455" alt="image" src="https://github.com/user-attachments/assets/d665c79e-cd9d-4091-93b7-218f1ae79257" />
+## Training Loss, Validation Loss Vs Iteration Plot
+<img width="773" height="722" alt="image" src="https://github.com/user-attachments/assets/0dd33d6a-c801-4d27-9b91-9f03bc804163" />
 
-### Sample Text Prediction
-<img width="439" height="499" alt="image" src="https://github.com/user-attachments/assets/a2a65810-29f9-4d19-bb1e-79042c78b5ac" />
+
+## Confusion Matrix
+<img width="546" height="487" alt="image" src="https://github.com/user-attachments/assets/fbe1e195-b810-4d92-9b87-5c31ac7f91ee" />
+
+## Classification Report
+<img width="454" height="183" alt="image" src="https://github.com/user-attachments/assets/d58504a1-3d92-45d9-b360-63a23be217f5" />
+
+
+### New Sample Data Prediction
+<img width="398" height="736" alt="image" src="https://github.com/user-attachments/assets/8630b9f4-73ff-4db2-a2ff-616b613f2952" />
 
 ## RESULT
-Thus, an LSTM-based model for recognizing the named entities in the text has been developed successfully.
-
+VGG19 model was fine-tuned and tested successfully. The model achieved good accuracy with correct predictions on sample test images.
